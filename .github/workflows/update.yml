@@ -1,0 +1,52 @@
+
+on:
+  schedule:
+    - cron: "0 12 * * *"   # 12:00 UTC = 08:00 Dominican Republic (UTC-4, no daylight saving)
+  workflow_dispatch:        # lets you run it by hand from the Actions tab
+  push:
+    branches: [main]        # runs once right after you set things up
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pdfplumber tzdata
+
+      - name: Get yesterday's snapshot (to detect changes)
+        run: |
+          curl -fsSL "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/state.json" -o prev_state.json || echo '{}' > prev_state.json
+
+      - name: Build calendar and send alerts
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python build_calendar.py
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Alert me if something broke
+        if: failure()
+        run: |
+          curl -s -H "Title: Fifth Committee calendar FAILED" -d "The daily update failed (PDF unreachable or layout changed). Check the Actions tab." "https://ntfy.sh/${{ secrets.NTFY_TOPIC }}"
